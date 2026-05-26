@@ -1,0 +1,6 @@
+# Arquivos temporários do Python
+__pycache__/
+
+# Ignorar dados baixados, extraídos e de cache
+data/
+*.7z
