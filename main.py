@@ -16,7 +16,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from ftp_downloader import get_latest_month, download_cagedmov, cleanup_old_files
-from data_processor import process_caged_data
+from data_processor import process_caged_data, load_from_cache
+
 
 # Configuração de logging
 logging.basicConfig(
@@ -37,7 +38,7 @@ _cache: dict = {
 _lock = threading.Lock()
 
 DATA_DIR = Path(__file__).parent / "data"
-UPDATE_INTERVAL_HOURS = 24
+UPDATE_INTERVAL_HOURS = 12  # Verifica o FTP a cada 12h (CAGED publica ~uma vez por mês)
 
 BASELINE_RN_STOCK = 553451
 BASELINE_NATAL_STOCK = 238450
@@ -252,8 +253,9 @@ def build_dashboard_response(result: dict) -> dict:
 
 def load_data_pipeline(force: bool = False):
     """
-    Pipeline completo: verifica FTP → baixa → processa → atualiza cache.
+    Pipeline completo: verifica FTP → baixa o mês mais recente → processa → atualiza cache.
     Thread-safe via _lock.
+    O histórico de 12 meses acumula naturalmente a cada novo mês publicado no FTP.
     """
     with _lock:
         if _cache["status"] == "loading":
@@ -274,12 +276,24 @@ def load_data_pipeline(force: bool = False):
                 _cache["status"] = "ready"
                 return
 
-        # Download
-        archive_path = download_cagedmov(latest)
+        # Tentar cache em disco antes de baixar do FTP
+        cached_result = None
+        if not force:
+            cached_result = load_from_cache(latest)
+            if cached_result and "rn" in cached_result and "municipios" in cached_result["rn"] and "nordeste" in cached_result:
+                logger.info(f"⚡ Cache válido em disco encontrado para {latest}. Evitando download do archive.")
+                cached_result["anomes"] = latest
+                result = cached_result
+            else:
+                cached_result = None
 
-        # Processamento
-        logger.info(f"Processando dados de {latest}...")
-        result = process_caged_data(archive_path, latest)
+        if cached_result is None:
+            # Download do mês mais recente
+            archive_path = download_cagedmov(latest)
+
+            # Processamento
+            logger.info(f"Processando dados de {latest}...")
+            result = process_caged_data(archive_path, latest)
 
         # Inserir no histórico de forma persistente
         save_to_history(result)
@@ -292,7 +306,7 @@ def load_data_pipeline(force: bool = False):
             _cache["last_check"] = time.time()
             _cache["error"] = None
 
-        # Limpar arquivos antigos
+        # Limpar arquivos antigos (apenas .7z e pastas extraídas)
         cleanup_old_files(latest)
         logger.info(f"✅ Dados prontos para {latest}")
 
@@ -304,14 +318,14 @@ def load_data_pipeline(force: bool = False):
 
 
 def background_updater():
-    """Thread de atualização periódica a cada UPDATE_INTERVAL_HOURS horas."""
+    """Verifica o FTP a cada UPDATE_INTERVAL_HOURS horas em busca de novo mês publicado."""
     while True:
+        time.sleep(UPDATE_INTERVAL_HOURS * 3600)
         try:
-            logger.info("🔄 Verificando atualização automática dos dados...")
+            logger.info("🔄 Verificando FTP em busca de novo mês do CAGED...")
             load_data_pipeline()
         except Exception as e:
             logger.error(f"Erro no updater: {e}")
-        time.sleep(UPDATE_INTERVAL_HOURS * 3600)
 
 
 @asynccontextmanager

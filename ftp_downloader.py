@@ -102,10 +102,22 @@ def download_cagedmov(anomes: str) -> Path:
 
 
 def cleanup_old_files(keep_anomes: str):
-    """Remove arquivos de meses antigos para economizar espaço."""
+    """Remove arquivos grandes de meses antigos para economizar espaço."""
     if not DATA_DIR.exists():
         return
     for f in DATA_DIR.iterdir():
-        if f.is_file() and keep_anomes not in f.name:
-            logger.info(f"Removendo arquivo antigo: {f.name}")
-            f.unlink()
+        # Remover arquivos .7z antigos (cada um tem ~59MB)
+        if f.is_file() and f.suffix == ".7z" and keep_anomes not in f.name:
+            logger.info(f"Removendo arquivo ZIP antigo: {f.name}")
+            try:
+                f.unlink()
+            except Exception as e:
+                logger.error(f"Erro ao remover {f.name}: {e}")
+        # Remover pastas extraídas antigas
+        elif f.is_dir() and f.name.startswith("extracted_") and keep_anomes not in f.name:
+            logger.info(f"Removendo pasta extraída antiga: {f.name}")
+            import shutil
+            try:
+                shutil.rmtree(f)
+            except Exception as e:
+                logger.error(f"Erro ao remover pasta {f.name}: {e}")
