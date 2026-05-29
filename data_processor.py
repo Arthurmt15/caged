@@ -429,7 +429,7 @@ def compute_by_porte(df: pd.DataFrame) -> list[dict]:
 
 
 def compute_by_municipality(df: pd.DataFrame) -> list[dict]:
-    """Retorna o saldo de vagas para os principais municípios selecionados do RN."""
+    """Retorna saldo, admissões e desligamentos para os principais municípios selecionados do RN."""
     if df.empty:
         return []
     col_map = _detect_columns(df)
@@ -437,25 +437,36 @@ def compute_by_municipality(df: pd.DataFrame) -> list[dict]:
     saldo_col = _saldo_col(df)
     if not mun_col or not saldo_col:
         return []
-    
-    s = pd.to_numeric(df[saldo_col], errors="coerce").fillna(0)
-    grouped = df.assign(_s=s).groupby(mun_col)["_s"].sum().reset_index()
-    grouped.columns = ["codigo", "saldo"]
-    
+
+    df2 = df.copy()
+    s = pd.to_numeric(df2[saldo_col], errors="coerce").fillna(0)
+    df2["_s"]   = s
+    df2["_adm"] = s.apply(lambda x: x if x > 0 else 0)
+    df2["_des"] = s.apply(lambda x: abs(x) if x < 0 else 0)
+
+    grouped = df2.groupby(mun_col).agg(
+        saldo=("_s", "sum"),
+        admissoes=("_adm", "sum"),
+        desligamentos=("_des", "sum"),
+    ).reset_index()
+    grouped.columns = ["codigo", "saldo", "admissoes", "desligamentos"]
+
     grouped["codigo"] = grouped["codigo"].astype(str).str.split('.').str[0].str.strip()
-    grouped["nome"] = grouped["codigo"].map(MUNICIPIOS_RN)
-    
+    grouped["nome"]   = grouped["codigo"].map(MUNICIPIOS_RN)
+
     grouped_filtered = grouped[grouped["nome"].notna()].copy()
-    grouped_filtered["saldo"] = grouped_filtered["saldo"].astype(int)
-    
+    grouped_filtered["saldo"]         = grouped_filtered["saldo"].astype(int)
+    grouped_filtered["admissoes"]     = grouped_filtered["admissoes"].astype(int)
+    grouped_filtered["desligamentos"] = grouped_filtered["desligamentos"].astype(int)
+
     existing_names = set(grouped_filtered["nome"])
     missing_records = []
     for code, name in MUNICIPIOS_RN.items():
         if name not in existing_names:
-            missing_records.append({"codigo": code, "nome": name, "saldo": 0})
+            missing_records.append({"codigo": code, "nome": name, "saldo": 0, "admissoes": 0, "desligamentos": 0})
     if missing_records:
         grouped_filtered = pd.concat([grouped_filtered, pd.DataFrame(missing_records)], ignore_index=True)
-        
+
     return grouped_filtered.sort_values("saldo", ascending=False).to_dict(orient="records")
 
 
