@@ -5,7 +5,6 @@ por Rio Grande do Norte (UF=24), Natal (município=240810) e região Nordeste.
 Cache em disco para reinicializações instantâneas.
 """
 
-import py7zr
 import pandas as pd
 import json
 import logging
@@ -153,6 +152,14 @@ def save_to_cache(anomes: str, data: dict):
 
 def extract_7z(archive_path: Path, extract_to: Path) -> list[Path]:
     """Extrai um arquivo .7z e retorna lista de arquivos extraídos."""
+    try:
+        import py7zr
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "py7zr não está instalado neste ambiente. Instale as dependências do projeto "
+            "ou use uma versão do Python com wheels disponíveis para py7zr."
+        ) from exc
+
     extract_to.mkdir(parents=True, exist_ok=True)
 
     # Se já foi extraído, não extrai de novo
@@ -583,9 +590,14 @@ def process_caged_data(archive_path: Path, anomes: str) -> dict:
     cached = load_from_cache(anomes)
     if cached:
         # Se o cache antigo não tiver as novas chaves, vamos reprocessar
-        if "rn" in cached and "municipios" in cached["rn"] and "nordeste" in cached:
+        nordeste_ok = (
+            "nordeste" in cached
+            and "admissoes" in cached["nordeste"]
+            and "desligamentos" in cached["nordeste"]
+        )
+        if "rn" in cached and "municipios" in cached["rn"] and nordeste_ok:
             return cached
-        logger.info("Cache antigo detectado sem as novas agregações. Reprocessando...")
+        logger.info("Cache antigo detectado sem admissoes/desligamentos no nordeste. Reprocessando...")
 
     # 2. Extrair .7z (ignora se já extraído)
     extract_dir = archive_path.parent / f"extracted_{anomes}"
@@ -612,6 +624,7 @@ def process_caged_data(archive_path: Path, anomes: str) -> dict:
     rn_porte         = compute_by_porte(df_rn)
     rn_servicos_det  = compute_services_detailing(df_rn)
 
+    ne_kpis = compute_kpis(df_ne)
     ne_estados, ne_capitais = compute_regional_context(df_ne)
 
     payload = {
@@ -634,6 +647,9 @@ def process_caged_data(archive_path: Path, anomes: str) -> dict:
             "detalhe_servicos": rn_servicos_det,
         },
         "nordeste": {
+            "saldo":            ne_kpis["saldo"],
+            "admissoes":        ne_kpis["admissoes"],
+            "desligamentos":    ne_kpis["desligamentos"],
             "ranking_estados":  ne_estados,
             "ranking_capitais": ne_capitais,
         }

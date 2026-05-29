@@ -92,6 +92,33 @@ def save_to_history(result: dict):
             logger.error(f"Erro ao salvar histórico local: {e}")
 
 
+def _build_contexto_regional(nordeste: dict) -> dict:
+    """
+    Converte o payload bruto do Nordeste (ranking_estados / ranking_capitais)
+    no formato que o frontend espera:
+      - saldo, admissoes, desligamentos  → KPIs totais da região
+      - estados  → lista com nome e saldo de cada UF
+      - capitais → lista com nome e saldo de cada capital
+    """
+    estados  = nordeste.get("ranking_estados",  [])
+    capitais = nordeste.get("ranking_capitais", [])
+
+    saldo_total       = sum(e.get("saldo", 0) for e in estados)
+    # O data_processor só salva saldo; admissões e desligamentos regionais
+    # são estimados a partir do saldo total (não há coluna separada no cache).
+    # Deixamos 0 como fallback para manter retrocompatibilidade com caches antigos.
+    admissoes_total   = nordeste.get("admissoes",     0)
+    desligamentos_total = nordeste.get("desligamentos", 0)
+
+    return {
+        "saldo":         saldo_total,
+        "admissoes":     admissoes_total,
+        "desligamentos": desligamentos_total,
+        "estados":  [{"nome": e.get("nome", ""), "saldo": e.get("saldo", 0)} for e in estados],
+        "capitais": [{"nome": c.get("nome", ""), "saldo": c.get("saldo", 0)} for c in capitais],
+    }
+
+
 def build_dashboard_response(result: dict) -> dict:
     """Combina o mês processado ao vivo com o histórico de 12 meses e gera as novas métricas."""
     current_anomes = result["anomes"]
@@ -238,7 +265,7 @@ def build_dashboard_response(result: dict) -> dict:
         "participacao_natal_admissoes": participacao_admissoes,
         "comparativo_setorial_rn_natal": comparativo_setorial,
         "municipios_rn": result["rn"]["municipios"],
-        "contexto_regional": result["nordeste"],
+        "contexto_regional": _build_contexto_regional(result["nordeste"]),
         "detalhe_servicos": result["rn"]["detalhe_servicos"],
         "saldo_porte": result["rn"]["por_porte"],
         "saldo_setor": result["rn"]["por_setor"],
@@ -280,11 +307,19 @@ def load_data_pipeline(force: bool = False):
         cached_result = None
         if not force:
             cached_result = load_from_cache(latest)
-            if cached_result and "rn" in cached_result and "municipios" in cached_result["rn"] and "nordeste" in cached_result:
+            nordeste_ok = (
+                cached_result is not None
+                and "nordeste" in cached_result
+                and "admissoes" in cached_result["nordeste"]
+                and "desligamentos" in cached_result["nordeste"]
+            )
+            if cached_result and "rn" in cached_result and "municipios" in cached_result["rn"] and nordeste_ok:
                 logger.info(f"⚡ Cache válido em disco encontrado para {latest}. Evitando download do archive.")
                 cached_result["anomes"] = latest
                 result = cached_result
             else:
+                if cached_result is not None:
+                    logger.info("Cache desatualizado (sem admissoes/desligamentos no nordeste). Reprocessando...")
                 cached_result = None
 
         if cached_result is None:
